@@ -1,0 +1,51 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:           Andris Geraldo de Castro
+Licensed Work:      Dropod (including dropod-api and dropod-web repositories and source code)
+Additional Use Grant:
+                    You may use the Licensed Work for non-commercial, personal, evaluation,
+                    or educational purposes. Any production or commercial use (including
+                    offering the Licensed Work as a hosted service or SaaS) requires an
+                    explicit commercial license from the Licensor.
+
+Change Date:        2029-10-28
+Change License:     GNU General Public License v3.0 or later (GPL-3.0-or-later)
+
+========================================================================================
+
+Text of the Business Source License 1.1
+
+1. GRANT OF LICENSE
+
+1.1. Subject to the terms and conditions hereof, Licensor hereby grants to You a
+non-exclusive, royalty-free, worldwide license to copy, modify, display, perform,
+and distribute the Licensed Work, provided that You comply with the Additional Use
+Grant and all terms and conditions of this License.
+
+1.2. On and after the Change Date, the Licensor grants You a license to use the
+Licensed Work under the terms of the Change License. On and after the Change Date,
+this License shall terminate and the Change License shall govern all use of the
+Licensed Work.
+
+2. RESTRICTIONS
+
+2.1. You may not use the Licensed Work for any commercial purpose or in production
+unless permitted by the Additional Use Grant or through a separate commercial
+agreement with Licensor.
+
+2.2. You may not remove, alter, or obscure any copyright, trademark, or other
+proprietary notices contained in the Licensed Work.
+
+3. NO WARRANTY / LIMITATION OF LIABILITY
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE
+FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE LICENSED WORK OR THE USE OR
+OTHER DEALINGS IN THE LICENSED WORK.
+
+========================================================================================
+Copyright (c) 2026 Andris Geraldo de Castro. All rights reserved.
