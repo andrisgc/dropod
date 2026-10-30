@@ -209,4 +209,5 @@ dropod/
 Distributed under the [Business Source License 1.1](LICENSE).  
 Commercial use requires explicit permission from the author.  
 See `LICENSE` for the full terms.
+
 ---
