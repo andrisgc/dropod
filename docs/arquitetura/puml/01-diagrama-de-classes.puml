@@ -1,0 +1,569 @@
+@startuml 01-diagrama-de-classes
+title Diagrama de Classes - Backend Java/Spring (monólito modular)
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide empty members
+
+' =====================================================
+' LAYOUT: ANCORAGEM DE PACOTES
+' =====================================================
+"entrada.web" -[hidden]down-> "aplicacao.servicos"
+"entrada.mensageria" -[hidden]down-> "aplicacao.servicos"
+"entrada.jobs" -[hidden]down-> "aplicacao.servicos"
+"aplicacao.servicos" -[hidden]down-> "dominio.modelo"
+"dominio.modelo" -[hidden]down-> "dominio.enums"
+"integracao.portas" -[hidden]right-> "integracao.adaptadores"
+
+' =====================================================
+' ENUMS
+' =====================================================
+package "dominio.enums" <<Rectangle>> {
+  enum StatusPedido {
+    CARRINHO
+    AGUARDANDO_PAGAMENTO
+    EXPIRADO
+    PAGO
+    PAGO_PENDENTE_DECISAO
+    DESPACHANDO
+    EM_ENTREGA
+    CONCLUIDO
+    FALHA_ENTREGA
+    CANCELADO
+    ESTORNADO
+  }
+
+  enum StatusCobranca {
+    ATIVA
+    PAGA
+    EXPIRADA
+    CANCELADA
+    DEVOLVIDA
+  }
+
+  enum TipoCobranca {
+    PRINCIPAL
+    COMPLEMENTAR
+  }
+
+  enum StatusEntrega {
+    SOLICITADA
+    ENTREGADOR_DESIGNADO
+    COLETADA
+    EM_ROTA
+    ENTREGUE
+    FALHA
+    CANCELADA
+    DEVOLVIDA
+  }
+
+  enum MotivoEstorno {
+    PAGAMENTO_TARDIO
+    FRETE_ACIMA_TOLERANCIA
+    SEM_ESTOQUE
+    SEM_ENTREGADOR
+    FALHA_ENTREGA
+    DUPLICIDADE
+    CANCELAMENTO
+    MANUAL
+  }
+
+  enum StatusEstorno {
+    SOLICITADO
+    CONCLUIDO
+    FALHOU
+  }
+
+  enum OrigemEvento {
+    WHATSAPP
+    GATEWAY_PIX
+    UBER
+  }
+
+  enum EstadoConversa {
+    MENU
+    CATALOGO
+    CARRINHO
+    ENDERECO
+    CONFIRMACAO_ENDERECO
+    AGUARDANDO_PAGAMENTO
+    DECISAO_DIFERENCA
+    ATENDIMENTO_HUMANO
+  }
+}
+
+' =====================================================
+' DOMINIO
+' =====================================================
+package "dominio.modelo" <<Rectangle>> {
+
+  class Cliente <<Entity>> {
+    - id: UUID
+    - telefoneWhatsapp: String
+    - nome: String
+    - criadoEm: Instant
+  }
+
+  class Produto <<Entity>> {
+    - id: UUID
+    - nome: String
+    - descricao: String
+    - preco: Dinheiro
+    - quantidadeEstoque: int
+    - pesoGramas: int
+    - ativo: boolean
+    - versao: long
+    + estaDisponivel(qtd: int): boolean
+    + baixarEstoque(qtd: int): void
+    + devolverEstoque(qtd: int): void
+  }
+
+  class ReservaEstoque <<Entity>> {
+    - id: UUID
+    - quantidade: int
+    - expiraEm: Instant
+    - status: StatusReserva
+    + consumir(): void
+    + liberar(): void
+    + expirou(agora: Instant): boolean
+  }
+
+  enum StatusReserva {
+    ATIVA
+    CONSUMIDA
+    LIBERADA
+  }
+
+  class Pedido <<Aggregate Root>> {
+    - id: UUID
+    - status: StatusPedido
+    - subtotalProdutos: Dinheiro
+    - freteCobrado: Dinheiro
+    - margemFrete: Dinheiro
+    - total: Dinheiro
+    - expiraEm: Instant
+    - destinatarioNome: String
+    - destinatarioTelefone: String
+    - criadoEm: Instant
+    - versao: long
+    + adicionarItem(produto: Produto, qtd: int): void
+    + removerItem(produtoId: UUID): void
+    + definirEndereco(e: EnderecoEntrega): void
+    + aplicarCotacao(c: CotacaoFrete, margem: Dinheiro): void
+    + aguardarPagamento(prazo: Instant): void
+    + expirar(): void
+    + marcarPago(): void
+    + aguardarDecisaoCliente(): void
+    + iniciarDespacho(): void
+    + emEntrega(): void
+    + concluir(): void
+    + registrarFalhaEntrega(): void
+    + cancelar(): void
+    + estornar(): void
+    + calcularTotal(): Dinheiro
+  }
+
+  class ItemPedido <<Entity>> {
+    - id: UUID
+    - quantidade: int
+    - precoUnitario: Dinheiro
+    + subtotal(): Dinheiro
+  }
+
+  class EnderecoEntrega <<Value Object>> {
+    - logradouro: String
+    - numero: String
+    - complemento: String
+    - bairro: String
+    - cidade: String
+    - uf: String
+    - cep: String
+    - referencia: String
+    - latitude: double
+    - longitude: double
+    + formatado(): String
+  }
+
+  class Dinheiro <<Value Object>> {
+    - valor: BigDecimal
+    + somar(o: Dinheiro): Dinheiro
+    + subtrair(o: Dinheiro): Dinheiro
+    + maiorQue(o: Dinheiro): boolean
+    + percentual(p: BigDecimal): Dinheiro
+  }
+
+  class CotacaoFrete <<Entity>> {
+    - id: UUID
+    - quoteIdUber: String
+    - valorFrete: Dinheiro
+    - validaAte: Instant
+    - tipo: TipoCotacao
+    + estaValida(agora: Instant): boolean
+  }
+
+  enum TipoCotacao {
+    INICIAL
+    RECOTACAO
+  }
+
+  class CobrancaPix <<Entity>> {
+    - id: UUID
+    - tipo: TipoCobranca
+    - txid: String
+    - valor: Dinheiro
+    - valorPago: Dinheiro
+    - status: StatusCobranca
+    - copiaECola: String
+    - expiraEm: Instant
+    - pagoEm: Instant
+    - endToEndId: String
+    + confirmarPagamento(valorPago: Dinheiro, pagoEm: Instant): void
+    + expirar(): void
+    + cancelar(): void
+    + pagoDentroDoPrazo(graca: Duration): boolean
+    + valorConfere(): boolean
+  }
+
+  class Estorno <<Entity>> {
+    - id: UUID
+    - valor: Dinheiro
+    - motivo: MotivoEstorno
+    - status: StatusEstorno
+    - idDevolucaoGateway: String
+    - solicitadoEm: Instant
+    - concluidoEm: Instant
+    + concluir(idGateway: String): void
+    + falhar(): void
+  }
+
+  class Entrega <<Entity>> {
+    - id: UUID
+    - uberDeliveryId: String
+    - status: StatusEntrega
+    - valorFreteFinal: Dinheiro
+    - custoAbsorvido: Dinheiro
+    - pinEntrega: String
+    - linkRastreio: String
+    - tentativas: int
+    - criadaEm: Instant
+    - concluidaEm: Instant
+    + registrarCriacao(id: String, pin: String, link: String): void
+    + atualizarStatus(novo: StatusEntrega): void
+    + incrementarTentativa(): void
+  }
+
+  class OcorrenciaEntrega <<Entity>> {
+    - id: UUID
+    - tipo: String
+    - responsavel: ResponsavelFalha
+    - descricao: String
+    - custo: Dinheiro
+    - resolvida: boolean
+  }
+
+  enum ResponsavelFalha {
+    CLIENTE
+    UBER
+    LOJISTA
+  }
+
+  class Conversa <<Entity>> {
+    - id: UUID
+    - estado: EstadoConversa
+    - contexto: Map<String, Object>
+    - atendimentoHumano: boolean
+    - ultimaInteracao: Instant
+    + transicionarPara(e: EstadoConversa): void
+    + pausarAutomacao(): void
+    + retomarAutomacao(): void
+  }
+
+  class ConfiguracaoLoja <<Entity>> {
+    - chave: String
+    - valor: String
+    + comoDinheiro(): Dinheiro
+    + comoDuracao(): Duration
+  }
+
+  class EventoExterno <<Entity>> {
+    - id: UUID
+    - origem: OrigemEvento
+    - idExterno: String
+    - tipoEvento: String
+    - payload: String
+    - status: StatusProcessamento
+    - tentativas: int
+    - recebidoEm: Instant
+    - processadoEm: Instant
+  }
+
+  enum StatusProcessamento {
+    RECEBIDO
+    ENFILEIRADO
+    PROCESSADO
+    FALHOU
+  }
+
+  class NotificacaoSaida <<Entity>> {
+    - id: UUID
+    - tipo: String
+    - prioridade: int
+    - payload: String
+    - status: String
+    - tentativas: int
+    - agendadaPara: Instant
+    - enviadaEm: Instant
+  }
+}
+
+' --- relacionamentos do dominio ---
+Cliente "1" -down-> "0..*" Pedido
+Cliente "1" -down-> "0..*" Conversa
+Pedido "1" *-- "1..*" ItemPedido
+Pedido "1" *-- "1" EnderecoEntrega
+Pedido "1" o-- "0..*" CotacaoFrete
+Pedido "1" o-- "0..*" CobrancaPix
+Pedido "1" o-- "0..1" Entrega
+Pedido "1" o-- "0..*" Estorno
+Pedido "1" o-- "0..*" ReservaEstoque
+Pedido ..> StatusPedido
+ItemPedido "*" -right-> "1" Produto
+ReservaEstoque "*" -right-> "1" Produto
+ReservaEstoque ..> StatusReserva
+CotacaoFrete ..> TipoCotacao
+CobrancaPix ..> TipoCobranca
+CobrancaPix ..> StatusCobranca
+CobrancaPix "1" o-- "0..*" Estorno
+Estorno ..> MotivoEstorno
+Estorno ..> StatusEstorno
+Entrega "*" -right-> "1" CotacaoFrete
+Entrega "1" *-- "0..*" OcorrenciaEntrega
+Entrega ..> StatusEntrega
+OcorrenciaEntrega ..> ResponsavelFalha
+Conversa ..> EstadoConversa
+EventoExterno ..> OrigemEvento
+EventoExterno ..> StatusProcessamento
+Pedido ..> Dinheiro
+Produto ..> Dinheiro
+
+' =====================================================
+' PORTAS E ADAPTADORES (integracoes externas)
+' =====================================================
+package "integracao.portas" <<Rectangle>> {
+
+  interface GatewayPixPort <<Port>> {
+    + criarCobranca(req: NovaCobrancaPix): CobrancaGateway
+    + cancelarCobranca(txid: String): void
+    + consultarCobranca(txid: String): CobrancaGateway
+    + devolver(endToEndId: String, valor: Dinheiro, motivo: String): DevolucaoGateway
+    + validarAssinatura(headers: Map<String,String>, corpo: String): boolean
+  }
+
+  interface UberDirectPort <<Port>> {
+    + cotar(req: CotacaoEntregaRequest): CotacaoEntregaResponse
+    + criarEntrega(req: NovaEntregaRequest): EntregaUberResponse
+    + cancelarEntrega(deliveryId: String): void
+    + validarAssinatura(headers: Map<String,String>, corpo: String): boolean
+  }
+
+  interface WhatsAppPort <<Port>> {
+    + enviarTexto(telefone: String, texto: String): void
+    + enviarBotoes(telefone: String, texto: String, botoes: List<Botao>): void
+    + enviarLista(telefone: String, texto: String, itens: List<ItemLista>): void
+    + enviarImagem(telefone: String, url: String, legenda: String): void
+    + validarAssinatura(headers: Map<String,String>, corpo: String): boolean
+  }
+
+  interface GeocodificacaoPort <<Port>> {
+    + geocodificar(e: EnderecoEntrega): ResultadoGeocodificacao
+  }
+}
+
+package "integracao.adaptadores" <<Rectangle>> {
+  class EfiPixAdapter <<Adapter>>
+  class AsaasPixAdapter <<Adapter>>
+  class UberDirectRestAdapter <<Adapter>>
+  class WhatsAppCloudAdapter <<Adapter>>
+  class GeocodificacaoAdapter <<Adapter>>
+}
+
+GatewayPixPort <|.. EfiPixAdapter
+GatewayPixPort <|.. AsaasPixAdapter
+UberDirectPort <|.. UberDirectRestAdapter
+WhatsAppPort <|.. WhatsAppCloudAdapter
+GeocodificacaoPort <|.. GeocodificacaoAdapter
+
+' =====================================================
+' SERVICOS DE APLICACAO
+' =====================================================
+package "aplicacao.servicos" <<Rectangle>> {
+
+  class ConversaService <<Service>> {
+    + tratarMensagem(ev: MensagemRecebida): void
+    + iniciarAtendimento(cliente: Cliente): void
+    + transferirParaHumano(conversaId: UUID): void
+  }
+
+  class CatalogoService <<Service>> {
+    + listarDisponiveis(): List<Produto>
+    + buscar(id: UUID): Produto
+  }
+
+  class EstoqueService <<Service>> {
+    + reservar(pedido: Pedido): List<ReservaEstoque>
+    + liberar(pedido: Pedido): void
+    + baixarDefinitivo(pedido: Pedido): void
+    + reconferir(pedido: Pedido): boolean
+  }
+
+  class PedidoService <<Service>> {
+    + iniciarPedido(clienteId: UUID): Pedido
+    + cotarEReservar(pedidoId: UUID): Pedido
+    + expirar(pedidoId: UUID): void
+    + cancelar(pedidoId: UUID): void
+  }
+
+  class CotacaoService <<Service>> {
+    + cotar(pedido: Pedido): CotacaoFrete
+    + recotar(pedido: Pedido): CotacaoFrete
+    + calcularMargem(frete: Dinheiro): Dinheiro
+  }
+
+  class PagamentoService <<Service>> {
+    + gerarPix(pedido: Pedido): CobrancaPix
+    + gerarPixComplementar(pedido: Pedido, diferenca: Dinheiro): CobrancaPix
+    + processarConfirmacao(ev: PagamentoConfirmado): void
+    + expirarCobranca(cobrancaId: UUID): void
+    + conciliar(): void
+  }
+
+  class EstornoService <<Service>> {
+    + estornar(cobranca: CobrancaPix, valor: Dinheiro, motivo: MotivoEstorno): Estorno
+    + reprocessarFalhos(): void
+  }
+
+  class EntregaService <<Service>> {
+    + despachar(pedido: Pedido): void
+    + tratarStatusUber(ev: StatusEntregaUber): void
+    + retentar(pedidoId: UUID): void
+    + cancelar(entregaId: UUID): void
+  }
+
+  class DespachoPolicy <<Policy>> {
+    + decidir(pedido: Pedido, freteAtual: Dinheiro, cfg: ConfiguracaoDespacho): DecisaoDespacho
+  }
+
+  enum DecisaoDespacho {
+    DESPACHAR
+    DESPACHAR_ABSORVENDO
+    PEDIR_COMPLEMENTO_OU_ESTORNO
+  }
+
+  class NotificacaoService <<Service>> {
+    + enfileirar(n: NotificacaoSaida): void
+    + enviarPendentes(): void
+    + alertarLojista(alerta: Alerta): void
+  }
+
+  class ConfiguracaoService <<Service>> {
+    + obter(chave: String): ConfiguracaoLoja
+    + atualizar(chave: String, valor: String, usuarioId: UUID): void
+    + configuracaoDespacho(): ConfiguracaoDespacho
+  }
+
+  class RecebimentoEventoService <<Service>> {
+    + registrarEEnfileirar(origem: OrigemEvento, idExterno: String, payload: String): EventoExterno
+  }
+
+  class AuditoriaService <<Service>> {
+    + registrar(entidade: String, id: UUID, acao: String, dados: String): void
+  }
+}
+
+DespachoPolicy ..> DecisaoDespacho
+
+' --- dependencias dos servicos ---
+ConversaService -down-> CatalogoService
+ConversaService -down-> PedidoService
+ConversaService ..> WhatsAppPort
+ConversaService ..> GeocodificacaoPort
+PedidoService -down-> CotacaoService
+PedidoService -down-> EstoqueService
+PedidoService -down-> PagamentoService
+CotacaoService ..> UberDirectPort
+CotacaoService -down-> ConfiguracaoService
+PagamentoService ..> GatewayPixPort
+PagamentoService -down-> EstornoService
+PagamentoService -down-> EntregaService
+PagamentoService -down-> NotificacaoService
+EstornoService ..> GatewayPixPort
+EntregaService ..> UberDirectPort
+EntregaService -down-> DespachoPolicy
+EntregaService -down-> CotacaoService
+EntregaService -down-> EstoqueService
+EntregaService -down-> EstornoService
+EntregaService -down-> NotificacaoService
+NotificacaoService ..> WhatsAppPort
+
+' =====================================================
+' ENTRADA: CONTROLLERS, CONSUMIDORES E JOBS
+' =====================================================
+package "entrada.web" <<Rectangle>> {
+  class WebhookWhatsAppController <<RestController>> {
+    + receber(corpo: String, headers: HttpHeaders): ResponseEntity<Void>
+  }
+  class WebhookPixController <<RestController>> {
+    + receber(corpo: String, headers: HttpHeaders): ResponseEntity<Void>
+  }
+  class WebhookUberController <<RestController>> {
+    + receber(corpo: String, headers: HttpHeaders): ResponseEntity<Void>
+  }
+  class PedidoPainelController <<RestController>>
+  class CatalogoPainelController <<RestController>>
+  class ConfiguracaoPainelController <<RestController>>
+  class FinanceiroPainelController <<RestController>>
+}
+
+package "entrada.mensageria" <<Rectangle>> {
+  class MensagemConsumer <<RabbitListener>>
+  class PagamentoConsumer <<RabbitListener>>
+  class StatusEntregaConsumer <<RabbitListener>>
+  class NotificacaoConsumer <<RabbitListener>>
+}
+
+package "entrada.jobs" <<Rectangle>> {
+  class ExpiracaoPedidoJob <<Scheduled>> {
+    + expirarPedidosVencidos(): void
+  }
+  class ReconciliacaoPagamentosJob <<Scheduled>> {
+    + conciliar(): void
+  }
+  class RetentativaDespachoJob <<Scheduled>> {
+    + retentar(): void
+  }
+}
+
+WebhookWhatsAppController -down-> RecebimentoEventoService
+WebhookPixController -down-> RecebimentoEventoService
+WebhookUberController -down-> RecebimentoEventoService
+WebhookWhatsAppController ..> WhatsAppPort : valida assinatura
+WebhookPixController ..> GatewayPixPort : valida assinatura
+WebhookUberController ..> UberDirectPort : valida assinatura
+
+MensagemConsumer -down-> ConversaService
+PagamentoConsumer -down-> PagamentoService
+StatusEntregaConsumer -down-> EntregaService
+NotificacaoConsumer -down-> NotificacaoService
+
+ExpiracaoPedidoJob -down-> PedidoService
+ReconciliacaoPagamentosJob -down-> PagamentoService
+RetentativaDespachoJob -down-> EntregaService
+
+PedidoPainelController -down-> PedidoService
+CatalogoPainelController -down-> CatalogoService
+ConfiguracaoPainelController -down-> ConfiguracaoService
+FinanceiroPainelController -down-> EstornoService
+
+@enduml

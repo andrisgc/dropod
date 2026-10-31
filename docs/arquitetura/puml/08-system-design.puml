@@ -1,0 +1,139 @@
+@startuml 08-system-design
+title System Design - Automação de Vendas via WhatsApp + PIX + Uber Flash
+
+skinparam shadowing false
+skinparam linetype ortho
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  RoundCorner 10
+}
+skinparam ArrowColor #444444
+skinparam NoteBackgroundColor #FFFBE6
+skinparam NoteBorderColor #BBA000
+
+actor "Cliente" as cliente
+actor "Lojista / Operador" as lojista
+
+cloud "Provedores externos" as ext {
+  component "WhatsApp Cloud API\n(Meta)" as whatsapp
+  component "Gateway PIX" as gateway
+  component "Uber Direct API" as uber
+  component "Geocodificação" as geo
+
+  whatsapp -[hidden]right-> gateway
+  gateway -[hidden]right-> uber
+  uber -[hidden]right-> geo
+}
+
+rectangle "Borda pública" as borda #E8F0FE {
+  component "DNS + CDN\nPainel React (estático)" as cdn
+  component "WAF + Load Balancer\nTLS, limite de taxa por IP,\nallowlist dos provedores" as lb
+
+  cdn -[hidden]right-> lb
+}
+
+rectangle "Cluster de aplicação (Kubernetes ou containers gerenciados, 2+ zonas)" as app #E6F4EA {
+  rectangle "API de Entrada\nSpring Boot, stateless\n2 a N réplicas\nautoscaling por RPS e CPU" as api
+  rectangle "Workers Spring Boot\nConversa, Pedidos, Pagamentos,\nEntregas, Notificações\nescala pelo tamanho da fila" as workers
+  rectangle "Jobs agendados\nShedLock: 1 líder ativo\nexpiração, reconciliação,\nretentativa de despacho" as jobs
+
+  api -[hidden]right-> workers
+  workers -[hidden]right-> jobs
+}
+
+rectangle "Camada de dados" as dados #FEF3E0 {
+  queue "RabbitMQ\ncluster de 3 nós\nquorum queues, DLQ,\nretry com backoff" as mq
+  database "PostgreSQL primário\n(via PgBouncer)" as pgp
+  database "PostgreSQL réplica\nde leitura (relatórios)" as pgr
+  database "Redis\nprimário + réplica\ncache, locks, rate limit" as redis
+  database "Object Storage\nbackups (PITR) e exportações" as bkp
+
+  mq -[hidden]right-> pgp
+  pgp -[hidden]right-> pgr
+  pgr -[hidden]right-> redis
+  redis -[hidden]right-> bkp
+}
+
+component "NAT Gateway\nIP fixo de saída" as nat #F3E8FD
+
+rectangle "Plataforma e operação" as plat #F1F3F4 {
+  component "Secrets Manager\nchaves de API e certificados mTLS" as secrets
+  component "Observabilidade\nPrometheus, Grafana, Loki,\nOpenTelemetry, Sentry" as obs
+  component "CI/CD\nGitHub Actions, registry,\ndeploy com staging e sandboxes" as cicd
+
+  secrets -[hidden]right-> obs
+  obs -[hidden]right-> cicd
+}
+
+' ---------- Posicionamento e Ancoragem ----------
+cliente -[hidden]right-> lojista
+ext -[hidden]down-> borda
+borda -[hidden]down-> app
+app -[hidden]down-> dados
+dados -[hidden]down-> plat
+app -[hidden]right-> nat
+
+' ---------- Entrada ----------
+cliente -down-> ext : conversa e paga o PIX
+lojista -down-> cdn : painel web
+ext -down-> lb : Webhooks de mensagem,\npagamento (assinatura ou mTLS)\ne status da corrida
+cdn -right-> lb : chamadas da API
+lb -down-> api : HTTPS
+
+' ---------- Núcleo assíncrono ----------
+api -down-> mq : publica evento
+api -down-> pgp : grava evento bruto\n(ACK em até 1 s)
+mq -right-> workers : consome
+workers -down-> pgp : estado do negócio
+workers -right-> redis : locks e cache
+jobs -left-> pgp : prazos e pendências
+jobs -up-> mq : eventos de expiração
+
+' ---------- Saída ----------
+workers -right-> nat : chamadas externas\ne mensagens de saida
+jobs -right-> nat : reconciliação
+nat -up-> ext : IP fixo de saída
+
+' ---------- Dados ----------
+pgp -right-> pgr : replicação
+pgp -down-> bkp : WAL e backup diario
+
+' ---------- Plataforma ----------
+plat .up.> app : segredos, logs, metricas,\ntraces e deploy
+
+' ---------- Notas ----------
+note bottom of lb
+  **Caminho crítico: Webhook de pagamento**
+  Validar assinatura, gravar em evento_externo (UNIQUE),
+  publicar na fila e responder 200 OK em até 1 s.
+  Toda regra de negócio roda depois, nos workers.
+end note
+
+note bottom of mq
+  **Resiliência**
+  Mensagens duráveis com ack, DLQ monitorada,
+  retentativa com backoff, consumidores idempotentes.
+  Prioridade alta para PIX e rastreio.
+end note
+
+note bottom of workers
+  **Isolamento de falhas**
+  Timeout, retry e circuit breaker por integração
+  (WhatsApp, Gateway PIX, Uber). A queda de uma API
+  não derruba as demais; pedidos pagos nunca são descartados.
+end note
+
+note right of pgp
+  **Metas (SLO) do MVP**
+  Webhook: resposta p95 até 1 s, 99,9% de disponibilidade
+  Pagamento ao despacho: p95 até 10 s
+  Backend: 99,5% mensal | RTO 30 min | RPO 5 min
+  Capacidade: 100 conversas e 20 pedidos por minuto
+end note
+
+legend bottom
+  Linhas cheias: tráfego de dados e eventos. Linhas pontilhadas: plataforma e operação.
+  Reconciliação (jobs) cobre Webhooks de pagamento perdidos.
+endlegend
+
+@enduml

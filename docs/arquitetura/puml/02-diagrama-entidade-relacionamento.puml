@@ -1,0 +1,267 @@
+@startuml 02-diagrama-entidade-relacionamento
+title Diagrama Entidade-Relacionamento (PostgreSQL)
+
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+
+' Convenção: * = obrigatório (NOT NULL) | <<PK>> chave primária | <<FK>> chave estrangeira | <<UK>> única
+
+entity "usuario_painel" as usuario_painel {
+  * id : uuid <<PK>>
+  --
+  * nome : varchar(120)
+  * email : varchar(160) <<UK>>
+  * senha_hash : varchar(255)
+  * perfil : varchar(20)   ' ADMINISTRADOR | OPERADOR
+  * ativo : boolean
+  * criado_em : timestamptz
+}
+
+entity "cliente" as cliente {
+  * id : uuid <<PK>>
+  --
+  * telefone_whatsapp : varchar(20) <<UK>>
+  nome : varchar(120)
+  * criado_em : timestamptz
+}
+
+entity "produto" as produto {
+  * id : uuid <<PK>>
+  --
+  * nome : varchar(160)
+  descricao : text
+  * preco : numeric(12,2)
+  * quantidade_estoque : integer
+  * peso_gramas : integer
+  foto_url : varchar(500)
+  * ativo : boolean
+  * versao : bigint   ' optimistic locking
+}
+
+entity "conversa" as conversa {
+  * id : uuid <<PK>>
+  --
+  * cliente_id : uuid <<FK>>
+  * estado : varchar(40)
+  contexto : jsonb
+  * atendimento_humano : boolean
+  * ultima_interacao : timestamptz
+}
+
+entity "pedido" as pedido {
+  * id : uuid <<PK>>
+  --
+  * cliente_id : uuid <<FK>>
+  conversa_id : uuid <<FK>>
+  * status : varchar(30)
+  destinatario_nome : varchar(120)
+  destinatario_telefone : varchar(20)
+  end_logradouro : varchar(200)
+  end_numero : varchar(20)
+  end_complemento : varchar(100)
+  end_bairro : varchar(100)
+  end_cidade : varchar(100)
+  end_uf : char(2)
+  end_cep : varchar(9)
+  end_referencia : varchar(200)
+  end_latitude : numeric(9,6)
+  end_longitude : numeric(9,6)
+  * subtotal_produtos : numeric(12,2)
+  frete_cobrado : numeric(12,2)
+  margem_frete : numeric(12,2)
+  total : numeric(12,2)
+  expira_em : timestamptz
+  * criado_em : timestamptz
+  * atualizado_em : timestamptz
+  * versao : bigint
+}
+
+entity "item_pedido" as item_pedido {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>>
+  * produto_id : uuid <<FK>>
+  * quantidade : integer
+  * preco_unitario : numeric(12,2)
+  * subtotal : numeric(12,2)
+}
+
+entity "reserva_estoque" as reserva_estoque {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>>
+  * produto_id : uuid <<FK>>
+  * quantidade : integer
+  * status : varchar(20)   ' ATIVA | CONSUMIDA | LIBERADA
+  * expira_em : timestamptz
+}
+
+entity "cotacao_frete" as cotacao_frete {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>>
+  * quote_id_uber : varchar(100) <<UK>>
+  * valor_frete : numeric(12,2)
+  * valida_ate : timestamptz
+  * tipo : varchar(15)   ' INICIAL | RECOTACAO
+  * criada_em : timestamptz
+}
+
+entity "cobranca_pix" as cobranca_pix {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>>
+  * tipo : varchar(15)   ' PRINCIPAL | COMPLEMENTAR
+  * txid : varchar(35) <<UK>>
+  * valor : numeric(12,2)
+  valor_pago : numeric(12,2)
+  * status : varchar(15)
+  * copia_e_cola : text
+  * expira_em : timestamptz
+  pago_em : timestamptz
+  end_to_end_id : varchar(40) <<UK>>
+  * criado_em : timestamptz
+}
+
+entity "estorno" as estorno {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>>
+  * cobranca_pix_id : uuid <<FK>>
+  * valor : numeric(12,2)
+  * motivo : varchar(30)
+  * status : varchar(15)
+  id_devolucao_gateway : varchar(60)
+  * solicitado_em : timestamptz
+  concluido_em : timestamptz
+}
+
+entity "entrega" as entrega {
+  * id : uuid <<PK>>
+  --
+  * pedido_id : uuid <<FK>> <<UK>>
+  * cotacao_id : uuid <<FK>>
+  uber_delivery_id : varchar(100) <<UK>>
+  * status : varchar(25)
+  valor_frete_final : numeric(12,2)
+  custo_absorvido : numeric(12,2)
+  pin_entrega : varchar(10)
+  link_rastreio : varchar(500)
+  * tentativas : integer
+  * criada_em : timestamptz
+  concluida_em : timestamptz
+}
+
+entity "ocorrencia_entrega" as ocorrencia_entrega {
+  * id : uuid <<PK>>
+  --
+  * entrega_id : uuid <<FK>>
+  * tipo : varchar(40)
+  * responsavel : varchar(15)   ' CLIENTE | UBER | LOJISTA
+  descricao : text
+  custo : numeric(12,2)
+  * resolvida : boolean
+  * criada_em : timestamptz
+}
+
+entity "evento_externo" as evento_externo {
+  * id : uuid <<PK>>
+  --
+  * origem : varchar(20)   ' WHATSAPP | GATEWAY_PIX | UBER
+  * id_externo : varchar(120)
+  * tipo_evento : varchar(60)
+  * payload : jsonb
+  * status : varchar(15)
+  * tentativas : integer
+  * recebido_em : timestamptz
+  processado_em : timestamptz
+  --
+  UNIQUE (origem, id_externo)
+}
+
+entity "notificacao_saida" as notificacao_saida {
+  * id : uuid <<PK>>
+  --
+  * cliente_id : uuid <<FK>>
+  pedido_id : uuid <<FK>>
+  * tipo : varchar(40)
+  * prioridade : smallint
+  * payload : jsonb
+  * status : varchar(15)
+  * tentativas : integer
+  * agendada_para : timestamptz
+  enviada_em : timestamptz
+}
+
+entity "configuracao_loja" as configuracao_loja {
+  * id : uuid <<PK>>
+  --
+  * chave : varchar(80) <<UK>>
+  * valor : varchar(255)
+  atualizado_por : uuid <<FK>>
+  * atualizado_em : timestamptz
+}
+
+entity "auditoria_evento" as auditoria_evento {
+  * id : bigserial <<PK>>
+  --
+  * entidade : varchar(60)
+  * entidade_id : uuid
+  * acao : varchar(60)
+  usuario_id : uuid <<FK>>
+  dados : jsonb
+  * ocorrido_em : timestamptz
+}
+
+' ---------------- Layout Ancoragem ----------------
+cliente -[hidden]right-> conversa
+conversa -[hidden]right-> pedido
+pedido -[hidden]down-> item_pedido
+item_pedido -[hidden]right-> produto
+pedido -[hidden]down-> cobranca_pix
+cobranca_pix -[hidden]right-> estorno
+pedido -[hidden]right-> entrega
+entrega -[hidden]down-> ocorrencia_entrega
+usuario_painel -[hidden]down-> configuracao_loja
+configuracao_loja -[hidden]right-> auditoria_evento
+evento_externo -[hidden]right-> notificacao_saida
+
+' ---------------- Relacionamentos ----------------
+cliente ||--o{ conversa : "participa"
+cliente ||--o{ pedido : "realiza"
+conversa |o--o{ pedido : "origina"
+pedido ||--|{ item_pedido : "contém"
+produto ||--o{ item_pedido : "é vendido em"
+pedido ||--o{ reserva_estoque : "reserva"
+produto ||--o{ reserva_estoque : "é reservado"
+pedido ||--o{ cotacao_frete : "recebe"
+pedido ||--o{ cobranca_pix : "gera"
+cobranca_pix ||--o{ estorno : "pode ter"
+pedido ||--o{ estorno : "origina"
+pedido ||--o| entrega : "tem"
+cotacao_frete ||--o{ entrega : "baseia"
+entrega ||--o{ ocorrencia_entrega : "registra"
+cliente ||--o{ notificacao_saida : "recebe"
+pedido |o--o{ notificacao_saida : "refere-se a"
+usuario_painel |o--o{ configuracao_loja : "altera"
+usuario_painel |o--o{ auditoria_evento : "executa"
+
+note bottom of evento_externo
+  Tabela de eventos brutos (Webhooks do WhatsApp,
+  Gateway PIX e Uber). A restrição UNIQUE (origem, id_externo)
+  garante a idempotência no recebimento.
+end note
+
+note bottom of notificacao_saida
+  Fila de saída (outbox) das mensagens ao cliente.
+  Permite retentativa e prioridade para PIX e rastreio.
+end note
+
+note bottom of cobranca_pix
+  O txid único vincula o pagamento ao pedido.
+  Valor e txid são conferidos antes de qualquer despacho.
+end note
+
+@enduml

@@ -1,0 +1,64 @@
+@startuml 05-c4-nivel2-container
+!include <C4/C4_Container>
+
+title C4 Nível 2 - Containers: Automação de Vendas via WhatsApp
+
+LAYOUT_WITH_LEGEND()
+
+Person(cliente, "Cliente", "Compra pelo WhatsApp.")
+Person(lojista, "Lojista / Operador", "Administra a operação pelo painel.")
+
+System_Ext(whatsapp, "WhatsApp API (Meta)", "Canal de mensagens com o cliente.")
+System_Ext(gateway, "Gateway PIX", "Cobranças PIX, Webhooks de pagamento e devoluções.")
+System_Ext(uber, "Uber Direct API", "Cotação, entregas e Webhooks de status.")
+System_Ext(geo, "Serviço de Geocodificação", "Validação de endereços.")
+
+System_Boundary(sistema, "Sistema de Automação de Vendas") {
+
+  Container(painel, "Painel do Lojista", "TypeScript, React (SPA)", "Catálogo, estoque, pedidos, configuração de regras, financeiro e alertas.")
+
+  Container(api, "API de Entrada", "Java, Spring Boot, Spring Security, Spring Web", "Recebe Webhooks (WhatsApp, PIX, Uber) e atende o painel. Valida assinatura, grava o evento bruto e responde em até 1 segundo.")
+
+  Container(workers, "Workers de Negócio", "Java, Spring Boot, Spring AMQP, Spring Data JPA, Resilience4j", "Módulos Conversa, Pedidos, Pagamentos, Entregas e Notificações. Consomem filas, aplicam as regras RN-01 a RN-14 e chamam as APIs externas.")
+
+  Container(jobs, "Jobs Agendados", "Java, Spring Scheduling, ShedLock", "Expiração de pedidos e PIX, reconciliação de pagamentos, retentativa de despacho e estornos pendentes.")
+
+  ContainerQueue(fila, "Fila de Mensagens", "RabbitMQ", "Eventos de mensagem, pagamento e status da Uber, mensagens de saída e filas de falhas (DLQ).")
+
+  ContainerDb(db, "Banco de Dados", "PostgreSQL", "Pedidos, itens, cotações, cobranças PIX, estornos, entregas, eventos externos, outbox e auditoria.")
+
+  ContainerDb(cache, "Cache e Locks", "Redis", "Cache de catálogo, locks distribuídos, limitação de taxa por telefone e controle de prazos curtos.")
+}
+
+' ---------- Pessoas ----------
+Rel(cliente, whatsapp, "Conversa e recebe PIX, rastreio e avisos", "WhatsApp")
+Rel(cliente, gateway, "Paga o PIX no app do banco", "PIX")
+Rel(lojista, painel, "Usa", "HTTPS")
+
+' ---------- Entradas ----------
+Rel(painel, api, "Consome a API do painel", "JSON / HTTPS, JWT")
+Rel(whatsapp, api, "Envia mensagens recebidas", "Webhook HTTPS")
+Rel(gateway, api, "Notifica pagamentos", "Webhook HTTPS (assinatura/mTLS)")
+Rel(uber, api, "Notifica status da corrida", "Webhook HTTPS (assinatura)")
+
+' ---------- Fluxo interno ----------
+Rel(api, db, "Grava eventos externos e lê dados do painel", "JDBC / JPA")
+Rel(api, fila, "Publica eventos recebidos", "AMQP")
+Rel(api, cache, "Limita taxa de requisições", "Redis protocol")
+
+Rel(fila, workers, "Entrega eventos para processamento", "AMQP")
+Rel(workers, db, "Lê e grava estado do negócio", "JDBC / JPA")
+Rel(workers, cache, "Locks, cache de catálogo e prazos", "Redis protocol")
+Rel(workers, fila, "Publica eventos de domínio e mensagens de saída", "AMQP")
+
+Rel(jobs, db, "Consulta pendências e prazos vencidos", "JDBC / JPA")
+Rel(jobs, fila, "Publica eventos de expiração e retentativa", "AMQP")
+Rel(jobs, gateway, "Reconcilia cobranças pendentes", "HTTPS / REST")
+
+' ---------- Saídas para sistemas externos ----------
+Rel(workers, whatsapp, "Envia catálogo, PIX, rastreio e avisos", "HTTPS / REST")
+Rel(workers, gateway, "Cria cobranças, consulta e solicita devoluções", "HTTPS / REST")
+Rel(workers, uber, "Cota, cria e cancela entregas", "HTTPS / REST")
+Rel(workers, geo, "Valida e geocodifica endereços", "HTTPS / REST")
+
+@endl

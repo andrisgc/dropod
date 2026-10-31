@@ -1,0 +1,34 @@
+@startuml 04-c4-nivel1-system-context
+!include <C4/C4_Context>
+
+title C4 Nível 1 - Contexto do Sistema: Automação de Vendas via WhatsApp
+
+LAYOUT_WITH_LEGEND()
+
+Person(cliente, "Cliente", "Compra produtos pelo WhatsApp: escolhe itens, informa endereço, paga via PIX e acompanha a entrega.")
+Person(lojista, "Lojista / Operador", "Gerencia catálogo, estoque, regras de frete e margem, acompanha pedidos, estornos e financeiro.")
+
+System(sistema, "Sistema de Automação de Vendas", "Automatiza atendimento, catálogo, cotação de frete, cobrança PIX, despacho Uber Flash e acompanhamento do pedido.")
+
+System_Ext(whatsapp, "WhatsApp API (Meta)", "Canal de conversa com o cliente: recebe e envia mensagens, botões, listas e imagens.")
+System_Ext(gateway, "Gateway PIX", "Gera cobranças PIX dinâmicas, notifica pagamentos por Webhook e executa devoluções.")
+System_Ext(uber, "Uber Direct API", "Cota o frete, cria e cancela entregas e notifica o status da corrida por Webhook.")
+System_Ext(geo, "Serviço de Geocodificação", "Valida e geocodifica o endereço de entrega.")
+
+Rel_D(cliente, whatsapp, "Conversa, paga o PIX e acompanha o pedido", "WhatsApp")
+Rel_R(whatsapp, sistema, "Entrega mensagens recebidas", "HTTPS / Webhook")
+Rel_L(sistema, whatsapp, "Envia catálogo, PIX, rastreio e avisos", "HTTPS / REST")
+
+Rel_R(sistema, gateway, "Cria cobrança PIX, consulta e solicita devolução", "HTTPS / REST")
+Rel_L(gateway, sistema, "Notifica pagamento confirmado", "HTTPS / Webhook")
+Rel_D(cliente, gateway, "Paga o PIX no app do banco", "PIX")
+
+Rel_D(sistema, uber, "Solicita cotação, cria e cancela entrega", "HTTPS / REST")
+Rel_U(uber, sistema, "Notifica status da corrida", "HTTPS / Webhook")
+
+Rel_D(sistema, geo, "Valida e geocodifica endereços", "HTTPS / REST")
+
+Rel_D(lojista, sistema, "Administra catálogo, regras, pedidos e financeiro", "HTTPS (painel web)")
+Rel_U(sistema, lojista, "Envia alertas operacionais", "Painel / WhatsApp / e-mail")
+
+@enduml

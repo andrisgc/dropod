@@ -1,0 +1,128 @@
+@startuml 07-diagrama-de-atividades
+title Diagrama de Atividades - Ciclo do pedido (do atendimento à conclusão)
+
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam ActivityBackgroundColor #FFFFFF
+skinparam ActivityBorderColor #555555
+skinparam PartitionBorderColor #888888
+skinparam PartitionBackgroundColor #F7F7F7
+skinparam defaultFontSize 12
+
+legend right
+  Prefixos: Cliente, Sistema, Gateway PIX e Uber
+  indicam quem executa cada atividade.
+end legend
+
+start
+
+partition "1. Atendimento, catálogo e carrinho" {
+  :Cliente chama no WhatsApp;
+  :Sistema apresenta menu e catálogo atualizado (RF-01, RF-02);
+  repeat
+    :Cliente escolhe produtos e quantidades;
+    if (Quantidade acima do estoque?) then (sim)
+      :Sistema informa o máximo disponível (RF-04);
+    endif
+  repeat while (Cliente quer alterar o carrinho?) is (sim) not (não)
+}
+
+partition "2. Endereço de entrega" {
+  repeat
+    :Cliente informa endereço completo e destinatário (RF-05, RF-07);
+    :Sistema valida e geocodifica o endereço (RF-06);
+  repeat while (Endereço inválido, incompleto ou fora da área?) is (sim) not (não)
+  :Cliente confirma o endereço apresentado;
+}
+
+partition "3. Cotação, reserva e PIX" {
+  repeat
+    :Sistema solicita cotação ao Uber Direct (RF-10);
+    if (Uber retornou cotação?) then (não)
+      :Sistema informa indisponibilidade e oferece alternativas (RF-15);
+      stop
+    endif
+    :Sistema calcula total = produtos + frete + margem (RN-03, RN-05);
+    :Sistema reserva estoque e define o prazo do pedido (RF-12, RF-13);
+    :Sistema cria cobrança PIX com expiração igual ao prazo (RF-16);
+    :Gateway PIX devolve Copia e Cola e QR Code;
+    :Sistema envia PIX, valor e horário-limite ao cliente (RF-17);
+    if (Cliente paga dentro do prazo?) then (sim)
+      break
+    endif
+    :Sistema expira pedido e PIX e libera o estoque (RN-01);
+    if (Cliente pede nova cotação?) then (não)
+      :Pedido encerrado como EXPIRADO;
+      stop
+    endif
+  repeat while (Nova cotação solicitada) is (sim) not (não)
+}
+
+partition "4. Confirmação do pagamento (Webhook)" {
+  :Gateway PIX envia Webhook de pagamento confirmado;
+  :Sistema valida assinatura, grava o evento e responde 200 OK (RF-19);
+  :Sistema confere txid, valor, horário e duplicidade (RF-20, RF-21);
+  :Sistema reconfere o estoque (RF-27);
+  if (Estoque disponível?) then (não)
+    :Sistema oferece entrega parcial, substituição ou estorno (RN-10);
+    :Sem resposta: estorno integral automático;
+    stop
+  endif
+  :Sistema baixa o estoque definitivamente;
+  :Sistema reconsulta o frete atual na Uber (RN-02);
+}
+
+partition "5. Decisão de frete no despacho (RN-04 e RN-08)" {
+  if (Pagamento tardio ou frete atual acima de cobrado + tolerância?) then (sim)
+    :Pedido em PAGO_PENDENTE_DECISAO;
+    :Sistema informa a diferença de frete ao cliente;
+    if (Cliente paga a diferença em até 10 minutos?) then (sim)
+      :Gateway PIX gera PIX complementar (RF-25);
+      :Cliente paga o PIX complementar;
+      :Sistema confirma o complemento;
+    else (não ou sem resposta)
+      :Sistema estorna integralmente via PIX (RF-24);
+      :Pedido ESTORNADO e cliente informado;
+      stop
+    endif
+  elseif (Frete atual acima do cobrado?) then (sim, dentro da tolerância)
+    :Sistema registra o custo absorvido pelo lojista;
+  else (não)
+    :Frete dentro do valor cobrado;
+  endif
+}
+
+partition "6. Despacho automático Uber Flash" {
+  repeat
+    :Sistema cria entrega no Uber Direct (RF-26);
+    if (Uber encontrou entregador?) then (sim)
+      break
+    endif
+    if (Esgotou 10 minutos de tentativas?) then (sim)
+      :Sistema oferece esperar mais ou estorno integral (RN-11);
+      :Sem resposta em 15 minutos: estorno automático;
+      stop
+    endif
+    :Sistema avisa o cliente que está buscando entregador;
+    :Sistema aguarda 60 segundos e refaz a cotação;
+  repeat while (Sem entregador) is (sim) not (não)
+  :Uber devolve id da corrida, link de rastreio e PIN;
+  :Sistema envia PIN e link de rastreamento ao cliente (RF-32);
+}
+
+partition "7. Acompanhamento e conclusão" {
+  :Uber coleta e transporta o pedido;
+  :Uber envia Webhooks de status (RF-28);
+  :Sistema atualiza o pedido e notifica o cliente (RF-33);
+  if (Entrega concluída?) then (sim)
+    :Pedido CONCLUIDO (RF-34);
+    :Sistema envia agradecimento e pesquisa de satisfação;
+  else (falha)
+    :Pedido em FALHA_ENTREGA;
+    :Sistema registra ocorrência e responsável (RN-12, RN-13);
+    :Sistema oferece reentrega paga ou estorno parcial;
+  endif
+}
+
+stop
+@enduml

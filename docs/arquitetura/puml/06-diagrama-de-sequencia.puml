@@ -1,0 +1,164 @@
+@startuml 06-diagrama-de-sequencia
+title Diagrama de Sequência - Do pedido no WhatsApp à entrega concluída
+
+autonumber
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+
+actor "Cliente" as C
+participant "WhatsApp API\n(Meta)" as W
+participant "Webhook*Controller\n(API de Entrada)" as WH
+queue "RabbitMQ" as Q
+participant "ConversaService" as CS
+participant "PedidoService" as PS
+participant "CotacaoService" as COT
+participant "EstoqueService" as EST
+participant "PagamentoService" as PAG
+participant "EntregaService" as ENT
+participant "DespachoPolicy" as POL
+participant "NotificacaoService" as NOT
+database "PostgreSQL" as DB
+participant "Uber Direct API" as U
+participant "Gateway PIX" as G
+
+== 1. Atendimento, catálogo e endereço ==
+C -> W : Mensagem (olá, catálogo, itens, endereço)
+W -> WH : Webhook de mensagem
+WH -> WH : valida assinatura
+WH -> DB : grava EventoExterno (UNIQUE origem + id_externo)
+WH -> Q : publica MensagemRecebida
+WH --> W : 200 OK (em até 1 segundo)
+Q -> CS : consome MensagemRecebida
+CS -> DB : carrega Conversa, Produtos e Pedido (CARRINHO)
+CS -> W : envia catálogo, carrinho e pedido de endereço
+W -> C : mensagens interativas
+C -> W : informa e confirma o endereço
+W -> WH : Webhook de mensagem
+WH -> Q : publica MensagemRecebida (via EventoExterno)
+Q -> CS : consome MensagemRecebida
+CS -> CS : valida e geocodifica o endereço
+
+== 2. Cotação, reserva e PIX ==
+CS -> PS : cotarEReservar(pedidoId)
+PS -> COT : cotar(pedido)
+COT -> U : solicita cotação (origem loja, destino cliente)
+U --> COT : quote_id, valor do frete, validade
+COT -> COT : calcula margem de segurança (RN-03)
+COT -> DB : grava CotacaoFrete
+PS -> EST : reservar(pedido) pelo prazo do PIX
+EST -> DB : grava ReservaEstoque (ATIVA)
+PS -> DB : Pedido = AGUARDANDO_PAGAMENTO (expira_em = agora + prazo)
+PS -> PAG : gerarPix(pedido)
+PAG -> G : cria cobrança PIX (valor exato, txid, expiração)
+G --> PAG : copia e cola e QR Code
+PAG -> DB : grava CobrancaPix (ATIVA)
+PAG -> NOT : enfileirar(PIX + horário-limite)
+NOT -> W : envia PIX e aviso de expiração
+W -> C : PIX Copia e Cola / QR Code
+
+== 3. Pagamento e confirmação por Webhook ==
+C -> G : paga o PIX no app do banco
+G -> WH : Webhook de pagamento confirmado
+WH -> WH : valida assinatura / mTLS
+WH -> DB : grava EventoExterno (idempotente)
+WH -> Q : publica PagamentoConfirmado
+WH --> G : 200 OK imediato
+Q -> PAG : consome PagamentoConfirmado
+PAG -> DB : localiza CobrancaPix por txid
+PAG -> PAG : confere txid, valor, horário do pagamento e duplicidade (RF-20, RF-21, RN-06, RN-07)
+
+alt Pagamento válido (dentro do prazo ou da janela de graça)
+  PAG -> DB : CobrancaPix = PAGA e Pedido = PAGO
+  PAG -> EST : baixarDefinitivo(pedido)
+  PAG -> ENT : despachar(pedido)
+else Pagamento fora do prazo ou com valor divergente
+  PAG -> ENT : tratarPagamentoTardio(pedido)
+  note right of ENT
+    Segue o bloco
+    "Frete acima da tolerância"
+  end note
+end
+
+== 4. Despacho automático (Uber Flash) ==
+ENT -> EST : reconferir(pedido)
+alt Estoque indisponível (RN-10)
+  ENT -> PAG : solicitar estorno integral (SEM_ESTOQUE)
+  ENT -> NOT : avisa o cliente e oferece alternativas
+else Estoque ok
+  ENT -> U : consulta frete atual (quote vigente ou nova cotação)
+  U --> ENT : valor do frete atual
+  ENT -> POL : decidir(pedido, freteAtual, configuração)
+
+  alt DESPACHAR ou DESPACHAR_ABSORVENDO (RN-04)
+    ENT -> U : cria entrega (quote_id, coleta, destinatário, itens)
+    alt Entregador encontrado
+      U --> ENT : delivery_id, link de rastreio, PIN
+      ENT -> DB : Entrega = SOLICITADA, Pedido = DESPACHANDO, grava custo absorvido
+      ENT -> NOT : enfileirar(rastreio + PIN)
+      NOT -> W : envia link de rastreio e PIN
+      W -> C : mensagem com rastreio e PIN
+    else Sem entregador ou falha da Uber (RN-11)
+      U --> ENT : erro / sem entregador
+      ENT -> DB : incrementa tentativas, agenda retentativa
+      ENT -> NOT : avisa o cliente (buscando entregador)
+      note over ENT, U
+        Retentativas a cada 60 s por até 10 min,
+        refazendo a cotação a cada tentativa.
+        Esgotadas: cliente escolhe esperar ou estorno;
+        sem resposta em 15 min, estorno automático.
+      end note
+    end
+  else PEDIR_COMPLEMENTO_OU_ESTORNO (RN-08)
+    ENT -> DB : Pedido = PAGO_PENDENTE_DECISAO
+    ENT -> NOT : informa nova diferença de frete
+    NOT -> W : oferece pagar a diferença ou estorno
+    W -> C : pergunta a decisão
+    alt Cliente paga a diferença
+      C -> W : escolhe pagar a diferença
+      PAG -> G : cria PIX complementar (valor da diferença)
+      G --> PAG : copia e cola complementar
+      PAG -> W : envia PIX complementar
+      C -> G : paga o PIX complementar
+      G -> WH : Webhook do pagamento complementar
+      WH -> Q : publica PagamentoConfirmado
+      Q -> PAG : consome e valida
+      PAG -> ENT : despachar(pedido)
+    else Cliente recusa ou não responde em até 10 min
+      PAG -> G : solicita devolução integral
+      G --> PAG : estorno concluído
+      PAG -> DB : Estorno = CONCLUIDO, Pedido = ESTORNADO
+      PAG -> NOT : informa o estorno ao cliente
+    end
+  end
+end
+
+== 5. Acompanhamento e conclusão ==
+U -> WH : Webhook de status (designado, coletado, em rota)
+WH -> DB : grava EventoExterno (idempotente)
+WH -> Q : publica StatusEntregaAtualizado
+Q -> ENT : consome status
+ENT -> DB : atualiza Entrega e Pedido = EM_ENTREGA (sem regredir estado)
+ENT -> NOT : enfileirar(aviso de status)
+NOT -> W : envia aviso
+W -> C : "Seu pedido está a caminho"
+
+alt Entregue
+  U -> WH : Webhook de entrega concluída
+  WH -> Q : publica StatusEntregaAtualizado
+  Q -> ENT : consome status
+  ENT -> DB : Entrega = ENTREGUE, Pedido = CONCLUIDO
+  ENT -> NOT : enfileirar(conclusão + pesquisa de satisfação)
+  NOT -> W : envia agradecimento
+  W -> C : pedido entregue
+else Falha na entrega (RN-12, RN-13)
+  U -> WH : Webhook de falha / devolução
+  WH -> Q : publica StatusEntregaAtualizado
+  Q -> ENT : consome status
+  ENT -> DB : Pedido = FALHA_ENTREGA, registra OcorrenciaEntrega
+  ENT -> NOT : avisa cliente e lojista
+  NOT -> W : oferece reentrega paga ou estorno parcial
+end
+
+@enduml
